@@ -26,7 +26,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.metastore.api.CurrentNotificationEventId;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.metastore.api.FileMetadataExprType;
 import org.apache.hadoop.hive.metastore.api.Function;
 import org.apache.hadoop.hive.metastore.api.Index;
 import org.apache.hadoop.hive.metastore.api.InvalidInputException;
@@ -50,7 +49,6 @@ import org.apache.hadoop.hive.metastore.metrics.Metrics;
 import org.apache.hadoop.hive.metastore.metrics.MetricsConstants;
 import org.apache.hadoop.hive.metastore.model.MNotificationLog;
 import org.apache.hadoop.hive.metastore.model.MNotificationNextId;
-import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Before;
@@ -96,41 +94,11 @@ public class TestObjectStore {
     }
   }
 
-  public static class MockPartitionExpressionProxy implements PartitionExpressionProxy {
-    @Override
-    public String convertExprToFilter(byte[] expr) throws MetaException {
-      return null;
-    }
-
-    @Override
-    public boolean filterPartitionsByExpr(List<FieldSchema> partColumns,
-                                          byte[] expr, String defaultPartitionName,
-                                          List<String> partitionNames)
-        throws MetaException {
-      return false;
-    }
-
-    @Override
-    public FileMetadataExprType getMetadataType(String inputFormat) {
-      return null;
-    }
-
-    @Override
-    public SearchArgument createSarg(byte[] expr) {
-      return null;
-    }
-
-    @Override
-    public FileFormatProxy getFileFormatProxy(FileMetadataExprType type) {
-      return null;
-    }
-  }
-
   @Before
   public void setUp() throws Exception {
     Configuration conf = MetastoreConf.newMetastoreConf();
     MetastoreConf.setVar(conf, MetastoreConf.ConfVars.EXPRESSION_PROXY_CLASS,
-        MockPartitionExpressionProxy.class.getName());
+        DefaultPartitionExpressionProxy.class.getName());
 
     objectStore = new ObjectStore();
     objectStore.setConf(conf);
@@ -463,7 +431,7 @@ public class TestObjectStore {
     Assume.assumeTrue(System.getProperty(key) == null);
     Configuration localConf = MetastoreConf.newMetastoreConf();
     MetastoreConf.setVar(localConf, MetastoreConf.ConfVars.EXPRESSION_PROXY_CLASS,
-        MockPartitionExpressionProxy.class.getName());
+        DefaultPartitionExpressionProxy.class.getName());
     localConf.set(key, value);
     localConf.set(key1, value1);
     objectStore = new ObjectStore();
@@ -538,7 +506,7 @@ public class TestObjectStore {
 
     Configuration conf = MetastoreConf.newMetastoreConf();
     MetastoreConf.setVar(conf, MetastoreConf.ConfVars.EXPRESSION_PROXY_CLASS,
-        MockPartitionExpressionProxy.class.getName());
+        DefaultPartitionExpressionProxy.class.getName());
     /*
        Below are the properties that need to be set based on what database this test is going to be run
      */
