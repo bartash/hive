@@ -209,7 +209,7 @@ public class MetaStoreSchemaInfo implements IMetaStoreSchemaInfo {
       throws HiveMetaException {
     String versionQuery;
     boolean needsQuotedIdentifier =
-        HiveSchemaHelper.getDbCommandParser(connectionInfo.getDbType()).needsQuotedIdentifier();
+        HiveSchemaHelper.getDbCommandParser(connectionInfo.getDbType(), false).needsQuotedIdentifier();
     if (needsQuotedIdentifier) {
       versionQuery = "select t.\"SCHEMA_VERSION\" from \"VERSION\" t";
     } else {

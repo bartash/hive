@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,8 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hive.beeline;
+package org.apache.hadoop.hive.metastore.tools;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.GnuParser;
@@ -30,30 +31,28 @@ import org.apache.commons.io.output.NullOutputStream;
 import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.HiveMetaException;
 import org.apache.hadoop.hive.metastore.IMetaStoreSchemaInfo;
 import org.apache.hadoop.hive.metastore.MetaStoreSchemaInfoFactory;
 import org.apache.hadoop.hive.metastore.TableType;
-import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
-import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper;
+import org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars;
 import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper.MetaStoreConnectionInfo;
 import org.apache.hadoop.hive.metastore.tools.HiveSchemaHelper.NestedScriptParser;
-import org.apache.hadoop.hive.shims.ShimLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.ImmutableMap;
+import sqlline.SqlLine;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.URI;
 import java.sql.Connection;
@@ -70,7 +69,10 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class HiveSchemaTool {
+public class MetastoreSchemaTool {
+  private static final Logger LOG = LoggerFactory.getLogger(MetastoreSchemaTool.class);
+  private static final String PASSWD_MASK = "[passwd stripped]";
+
   private String userName = null;
   private String passWord = null;
   private boolean dryRun = false;
@@ -79,63 +81,65 @@ public class HiveSchemaTool {
   private String url = null;
   private String driver = null;
   private URI[] validationServers = null; // The list of servers the database/partition/table can locate on
-  private final HiveConf hiveConf;
+  private final Configuration conf;
   private final String dbType;
-  private final String metaDbType;
   private final IMetaStoreSchemaInfo metaStoreSchemaInfo;
   private boolean needsQuotedIdentifier;
 
-  static final private Logger LOG = LoggerFactory.getLogger(HiveSchemaTool.class.getName());
-
-  public HiveSchemaTool(String dbType, String metaDbType) throws HiveMetaException {
-    this(System.getenv("HIVE_HOME"), new HiveConf(HiveSchemaTool.class), dbType, metaDbType);
+  private static String findHomeDir() {
+    // If METASTORE_HOME is set, use it, else use HIVE_HOME for backwards compatibility.
+    String homeDir = System.getenv("METASTORE_HOME");
+    return homeDir == null ? System.getenv("HIVE_HOME") : homeDir;
   }
 
-  public HiveSchemaTool(String hiveHome, HiveConf hiveConf, String dbType, String metaDbType)
+  private MetastoreSchemaTool(String dbType) throws HiveMetaException {
+    this(findHomeDir(), MetastoreConf.newMetastoreConf(), dbType);
+  }
+
+  MetastoreSchemaTool(String hiveHome, Configuration conf, String dbType)
       throws HiveMetaException {
     if (hiveHome == null || hiveHome.isEmpty()) {
       throw new HiveMetaException("No Hive home directory provided");
     }
-    this.hiveConf = hiveConf;
+    this.conf = conf;
     this.dbType = dbType;
-    this.metaDbType = metaDbType;
     this.needsQuotedIdentifier = getDbCommandParser(dbType).needsQuotedIdentifier();
-    this.metaStoreSchemaInfo = MetaStoreSchemaInfoFactory.get(hiveConf, hiveHome, dbType);
+    this.metaStoreSchemaInfo = MetaStoreSchemaInfoFactory.get(conf, hiveHome, dbType);
   }
 
-  public HiveConf getHiveConf() {
-    return hiveConf;
+  Configuration getConf() {
+    return conf;
   }
 
-  public void setUrl(String url) {
+  void setUrl(String url) {
     this.url = url;
   }
 
-  public void setDriver(String driver) {
+  void setDriver(String driver) {
     this.driver = driver;
   }
 
-  public void setUserName(String userName) {
+  void setUserName(String userName) {
     this.userName = userName;
   }
 
-  public void setPassWord(String passWord) {
+  void setPassWord(String passWord) {
     this.passWord = passWord;
   }
 
-  public void setDryRun(boolean dryRun) {
+  void setDryRun(boolean dryRun) {
     this.dryRun = dryRun;
   }
 
-  public void setVerbose(boolean verbose) {
+  void setVerbose(boolean verbose) {
     this.verbose = verbose;
   }
 
-  public void setDbOpts(String dbOpts) {
+  void setDbOpts(String dbOpts) {
     this.dbOpts = dbOpts;
   }
 
-  public void setValidationServers(String servers) {
+  void setValidationServers(String servers) {
     if(StringUtils.isNotEmpty(servers)) {
       String[] strServers = servers.split(",");
       this.validationServers = new URI[strServers.length];
@@ -154,24 +158,18 @@ public class HiveSchemaTool {
   Connection getConnectionToMetastore(boolean printInfo)
       throws HiveMetaException {
     return HiveSchemaHelper.getConnectionToMetastore(userName,
-        passWord, url, driver, printInfo, hiveConf);
-  }
-
-  private NestedScriptParser getDbCommandParser(String dbType, String metaDbType) {
-    return HiveSchemaHelper.getDbCommandParser(dbType, dbOpts, userName,
-	passWord, hiveConf, metaDbType, false);
+        passWord, url, driver, printInfo, conf);
   }
 
   private NestedScriptParser getDbCommandParser(String dbType) {
     return HiveSchemaHelper.getDbCommandParser(dbType, dbOpts, userName,
-	passWord, hiveConf, null, false);
+	passWord, conf, null, true);
   }
 
   /***
    * Print Hive version and schema version
-   * @throws MetaException
    */
-  public void showInfo() throws HiveMetaException {
+  private void showInfo() throws HiveMetaException {
     String hiveVersion = metaStoreSchemaInfo.getHiveSchemaVersion();
     String dbVersion = metaStoreSchemaInfo.getMetaStoreSchemaVersion(getConnectionInfo(true));
     System.out.println("Hive distribution version:\t " + hiveVersion);
@@ -475,9 +473,9 @@ public class HiveSchemaTool {
 
   /**
    * check if the current schema version in metastore matches the Hive version
-   * @throws MetaException
    */
-  public void verifySchemaVersion() throws HiveMetaException {
+  @VisibleForTesting
+  void verifySchemaVersion() throws HiveMetaException {
     // don't check version if its a dry run
     if (dryRun) {
       return;
@@ -497,9 +495,8 @@ public class HiveSchemaTool {
 
   /**
    * Perform metastore schema upgrade. extract the current schema version from metastore
-   * @throws MetaException
    */
-  public void doUpgrade() throws HiveMetaException {
+  void doUpgrade() throws HiveMetaException {
     String fromVersion =
       metaStoreSchemaInfo.getMetaStoreSchemaVersion(getConnectionInfo(false));
     if (fromVersion == null || fromVersion.isEmpty()) {
@@ -510,7 +507,7 @@ public class HiveSchemaTool {
   }
 
   private MetaStoreConnectionInfo getConnectionInfo(boolean printInfo) {
-    return new MetaStoreConnectionInfo(userName, passWord, url, driver, printInfo, hiveConf,
+    return new MetaStoreConnectionInfo(userName, passWord, url, driver, printInfo, conf,
         dbType);
   }
   /**
@@ -518,9 +515,8 @@ public class HiveSchemaTool {
    *
    * @param fromSchemaVer
    *          Existing version of the metastore. If null, then read from the metastore
-   * @throws MetaException
    */
-  public void doUpgrade(String fromSchemaVer) throws HiveMetaException {
+  void doUpgrade(String fromSchemaVer) throws HiveMetaException {
     if (metaStoreSchemaInfo.getHiveSchemaVersion().equals(fromSchemaVer)) {
       System.out.println("No schema upgrade required from version " + fromSchemaVer);
       return;
@@ -537,7 +533,7 @@ public class HiveSchemaTool {
         System.out.println("Upgrade script " + scriptFile);
         if (!dryRun) {
           runPreUpgrade(scriptDir, scriptFile);
-          runBeeLine(scriptDir, scriptFile);
+          runSqlLine(scriptDir, scriptFile);
           System.out.println("Completed " + scriptFile);
         }
       }
@@ -553,9 +549,8 @@ public class HiveSchemaTool {
   /**
    * Initialize the metastore schema to current version
    *
-   * @throws MetaException
    */
-  public void doInit() throws HiveMetaException {
+  void doInit() throws HiveMetaException {
     doInit(metaStoreSchemaInfo.getHiveSchemaVersion());
 
     // Revalidated the new version after upgrade
@@ -567,9 +562,8 @@ public class HiveSchemaTool {
    *
    * @param toVersion
    *          If null then current hive version is used
-   * @throws MetaException
    */
-  public void doInit(String toVersion) throws HiveMetaException {
+  void doInit(String toVersion) throws HiveMetaException {
     testConnectionToMetastore();
     System.out.println("Starting metastore schema initialization to " + toVersion);
 
@@ -579,7 +573,7 @@ public class HiveSchemaTool {
     try {
       System.out.println("Initialization script " + initScriptFile);
       if (!dryRun) {
-        runBeeLine(initScriptDir, initScriptFile);
+        runSqlLine(initScriptDir, initScriptFile);
         System.out.println("Initialization script completed");
       }
     } catch (IOException e) {
@@ -588,12 +582,12 @@ public class HiveSchemaTool {
     }
   }
 
-  public void doValidate() throws HiveMetaException {
+  void doValidate() throws HiveMetaException {
     System.out.println("Starting metastore validation\n");
     Connection conn = getConnectionToMetastore(false);
     boolean success = true;
     try {
-      if (validateSchemaVersions(conn)) {
+      if (validateSchemaVersions()) {
         System.out.println("[SUCCESS]\n");
       } else {
         success = false;
@@ -701,7 +695,7 @@ public class HiveSchemaTool {
     }
   }
 
-  boolean validateSchemaVersions(Connection conn) throws HiveMetaException {
+  boolean validateSchemaVersions() throws HiveMetaException {
     System.out.println("Validating schema version");
     try {
       String newSchemaVersion = metaStoreSchemaInfo.getMetaStoreSchemaVersion(getConnectionInfo(false));
@@ -722,13 +716,13 @@ public class HiveSchemaTool {
   }
 
   boolean validateSchemaTables(Connection conn) throws HiveMetaException {
-    String version            = null;
+    String version;
     ResultSet rs              = null;
-    DatabaseMetaData metadata = null;
-    List<String> dbTables     = new ArrayList<String>();
-    List<String> schemaTables = new ArrayList<String>();
-    List<String> subScripts   = new ArrayList<String>();
-    Connection hmsConn        = getConnectionToMetastore(false);
+    DatabaseMetaData metadata;
+    List<String> dbTables     = new ArrayList<>();
+    List<String> schemaTables = new ArrayList<>();
+    List<String> subScripts   = new ArrayList<>();
+    Connection hmsConn;
 
     System.out.println("Validating metastore schema tables");
     try {
@@ -748,7 +742,7 @@ public class HiveSchemaTool {
       metadata       = conn.getMetaData();
       String[] types = {"TABLE"};
       rs             = metadata.getTables(null, hmsConn.getSchema(), "%", types);
-      String table   = null;
+      String table;
 
       while (rs.next()) {
         table = rs.getString("TABLE_NAME");
@@ -804,10 +798,10 @@ public class HiveSchemaTool {
 
   private List<String> findCreateTable(String path, List<String> tableList)
       throws Exception {
-    NestedScriptParser sp           = HiveSchemaHelper.getDbCommandParser(dbType, false);
-    Matcher matcher                 = null;
-    Pattern regexp                  = null;
-    List<String> subs               = new ArrayList<String>();
+    NestedScriptParser sp           = HiveSchemaHelper.getDbCommandParser(dbType, true);
+    Matcher matcher;
+    Pattern regexp;
+    List<String> subs               = new ArrayList<>();
     int groupNo                     = 2;
 
     regexp = Pattern.compile("CREATE TABLE(\\s+IF NOT EXISTS)?\\s+(\\S+).*");
@@ -817,12 +811,12 @@ public class HiveSchemaTool {
     }
 
     try (
-      BufferedReader reader = new BufferedReader(new FileReader(path));
+      BufferedReader reader = new BufferedReader(new FileReader(path))
     ){
-      String line = null;
+      String line;
       while ((line = reader.readLine()) != null) {
         if (sp.isNestedScript(line)) {
-          String subScript = null;
+          String subScript;
           subScript = sp.getScriptName(line);
           LOG.debug("Schema subscript " + subScript + " found");
           subs.add(subScript);
@@ -895,7 +889,7 @@ public class HiveSchemaTool {
       }
 
       try {
-        runBeeLine(scriptDir, preUpgradeScript);
+        runSqlLine(scriptDir, preUpgradeScript);
         System.out.println("Completed " + preUpgradeScript);
       } catch (Exception e) {
         // Ignore the pre-upgrade script errors
@@ -912,64 +906,59 @@ public class HiveSchemaTool {
    * Run beeline with the given metastore script. Flatten the nested scripts
    * into single file.
    */
-  private void runBeeLine(String scriptDir, String scriptFile)
+  private void runSqlLine(String scriptDir, String scriptFile)
       throws IOException, HiveMetaException {
-    NestedScriptParser dbCommandParser = getDbCommandParser(dbType, metaDbType);
 
-    // expand the nested script
-    // If the metaDbType is set, this is setting up the information
-    // schema in Hive. That specifically means that the sql commands need
-    // to be adjusted for the underlying RDBMS (correct quotation
-    // strings, etc).
-    String sqlCommands = dbCommandParser.buildCommand(scriptDir, scriptFile, metaDbType != null);
-    File tmpFile = File.createTempFile("schematool", ".sql");
-    tmpFile.deleteOnExit();
-
-    // write out the buffer into a file. Add beeline commands for autocommit and close
-    FileWriter fstream = new FileWriter(tmpFile.getPath());
-    BufferedWriter out = new BufferedWriter(fstream);
-    out.write("!autocommit on" + System.getProperty("line.separator"));
-    out.write(sqlCommands);
-    out.write("!closeall" + System.getProperty("line.separator"));
-    out.close();
-    runBeeLine(tmpFile.getPath());
+    // This no longer does expansions of run commands in the files as it used to.  Instead it
+    // depends on the developers to have already unrolled those in the files.
+    runSqlLine(scriptDir + File.separatorChar + scriptFile);
   }
 
   // Generate the beeline args per hive conf and execute the given script
-  public void runBeeLine(String sqlScriptFile) throws IOException {
-    CommandBuilder builder = new CommandBuilder(hiveConf, url, driver,
+  void runSqlLine(String sqlScriptFile) throws IOException {
+    CommandBuilder builder = new CommandBuilder(conf, url, driver,
         userName, passWord, sqlScriptFile);
 
-    // run the script using Beeline
-    try (BeeLine beeLine = new BeeLine()) {
-      if (!verbose) {
-        beeLine.setOutputStream(new PrintStream(new NullOutputStream()));
-        beeLine.getOpts().setSilent(true);
+    // run the script using SqlLine
+    SqlLine sqlLine = new SqlLine();
+    ByteArrayOutputStream outputForLog = null;
+    if (!verbose) {
+      OutputStream out;
+      if (LOG.isDebugEnabled()) {
+        out = outputForLog = new ByteArrayOutputStream();
+      } else {
+        out = new NullOutputStream();
       }
-      beeLine.getOpts().setAllowMultiLineCommand(false);
-      beeLine.getOpts().setIsolation("TRANSACTION_READ_COMMITTED");
-      // We can be pretty sure that an entire line can be processed as a single command since
-      // we always add a line separator at the end while calling dbCommandParser.buildCommand.
-      beeLine.getOpts().setEntireLineAsCommand(true);
-      LOG.debug("Going to run command <" + builder.buildToLog() + ">");
-      int status = beeLine.begin(builder.buildToRun(), null);
-      if (status != 0) {
-        throw new IOException("Schema script failed, errorcode " + status);
-      }
+      sqlLine.setOutputStream(new PrintStream(out));
+      System.setProperty("sqlline.silent", "true");
+    }
+    //sqlLine.getOpts().setAllowMultiLineCommand(false);
+    System.setProperty("sqlline.isolation","TRANSACTION_READ_COMMITTED");
+    // We can be pretty sure that an entire line can be processed as a single command since
+    // we always add a line separator at the end while calling dbCommandParser.buildCommand.
+    //sqlLine.getOpts().setEntireLineAsCommand(true);
+    LOG.info("Going to run command <" + builder.buildToLog() + ">");
+    SqlLine.Status status = sqlLine.begin(builder.buildToRun(), null, false);
+    if (LOG.isDebugEnabled() && outputForLog != null) {
+      LOG.debug("Received following output from Sqlline:");
+      LOG.debug(outputForLog.toString("UTF-8"));
+    }
+    if (status != SqlLine.Status.OK) {
+      throw new IOException("Schema script failed, errorcode " + status);
     }
   }
 
   static class CommandBuilder {
-    private final HiveConf hiveConf;
+    private final Configuration conf;
     private final String userName;
     private final String password;
     private final String sqlScriptFile;
     private final String driver;
     private final String url;
 
-    CommandBuilder(HiveConf hiveConf, String url, String driver,
-        String userName, String password, String sqlScriptFile) {
-      this.hiveConf = hiveConf;
+    CommandBuilder(Configuration conf, String url, String driver,
+                   String userName, String password, String sqlScriptFile) {
+      this.conf = conf;
       this.userName = userName;
       this.password = password;
       this.url = url;
@@ -983,14 +972,14 @@ public class HiveSchemaTool {
 
     String buildToLog() throws IOException {
       logScript();
-      return StringUtils.join(argsWith(BeeLine.PASSWD_MASK), " ");
+      return StringUtils.join(argsWith(PASSWD_MASK), " ");
     }
 
     private String[] argsWith(String password) throws IOException {
       return new String[]
         {
-          "-u", url == null ? HiveSchemaHelper.getValidConfVar(MetastoreConf.ConfVars.CONNECTURLKEY, hiveConf) : url,
-          "-d", driver == null ? HiveSchemaHelper.getValidConfVar(MetastoreConf.ConfVars.CONNECTION_DRIVER, hiveConf) : driver,
+          "-u", url == null ? MetastoreConf.getVar(conf, ConfVars.CONNECTURLKEY) : url,
+          "-d", driver == null ? MetastoreConf.getVar(conf, ConfVars.CONNECTION_DRIVER) : driver,
           "-n", userName,
           "-p", password,
           "-f", sqlScriptFile
@@ -1077,8 +1066,8 @@ public class HiveSchemaTool {
     CommandLineParser parser = new GnuParser();
     CommandLine line = null;
     String dbType = null;
-    String metaDbType = null;
-    String schemaVer = null;
+    String metaDbType;
+    String schemaVer;
     Options cmdLineOptions = new Options();
 
     // Argument handling
@@ -1134,22 +1123,20 @@ public class HiveSchemaTool {
     }
 
 
-    System.setProperty(HiveConf.ConfVars.METASTORE_SCHEMA_VERIFICATION.varname, "true");
+    System.setProperty(ConfVars.SCHEMA_VERIFICATION.toString(), "true");
     try {
-      HiveSchemaTool schemaTool = new HiveSchemaTool(dbType, metaDbType);
+      MetastoreSchemaTool schemaTool = new MetastoreSchemaTool(dbType);
 
       if (line.hasOption("userName")) {
         schemaTool.setUserName(line.getOptionValue("userName"));
       } else {
-        schemaTool.setUserName(
-            schemaTool.getHiveConf().get(ConfVars.METASTORE_CONNECTION_USER_NAME.varname));
+        schemaTool.setUserName(MetastoreConf.getVar(schemaTool.getConf(), ConfVars.CONNECTION_USER_NAME));
       }
       if (line.hasOption("passWord")) {
         schemaTool.setPassWord(line.getOptionValue("passWord"));
       } else {
         try {
-          schemaTool.setPassWord(ShimLoader.getHadoopShims().getPassword(schemaTool.getHiveConf(),
-              HiveConf.ConfVars.METASTOREPWD.varname));
+          schemaTool.setPassWord(MetastoreConf.getPassword(schemaTool.getConf(), ConfVars.PWD));
         } catch (IOException err) {
           throw new HiveMetaException("Error getting metastore password", err);
         }
@@ -1191,7 +1178,7 @@ public class HiveSchemaTool {
         printAndExit(cmdLineOptions);
       }
     } catch (HiveMetaException e) {
-      System.err.println(e);
+      System.err.println(e.getMessage());
       if (e.getCause() != null) {
         Throwable t = e.getCause();
         System.err.println("Underlying cause: "
