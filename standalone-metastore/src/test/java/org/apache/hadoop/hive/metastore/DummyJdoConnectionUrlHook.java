@@ -16,35 +16,30 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.hive.metastore.events;
+package org.apache.hadoop.hive.metastore;
 
-import org.apache.hadoop.hive.metastore.IHMSHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.apache.hadoop.hive.metastore.RawStore;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.metastore.hooks.JDOConnectionURLHook;
 
-public class EventCleanerTask implements Runnable {
+/**
+ *
+ * DummyJdoConnectionUrlHook.
+ *
+ * An implementation of JDOConnectionURLHook which simply returns CORRECT_URL when
+ * getJdoConnectionUrl is called.
+ */
+public class DummyJdoConnectionUrlHook implements JDOConnectionURLHook {
 
-  public static final Logger LOG = LoggerFactory.getLogger(EventCleanerTask.class);
-  private final IHMSHandler handler;
+  public static final String initialUrl = "BAD_URL";
+  public static final String newUrl = "CORRECT_URL";
 
-  public EventCleanerTask(IHMSHandler handler) {
-    super();
-    this.handler = handler;
+  @Override
+  public String getJdoConnectionUrl(Configuration conf) throws Exception {
+    return newUrl;
   }
 
   @Override
-  public void run() {
-
-    try {
-      RawStore ms = handler.getMS();
-      long deleteCnt = ms.cleanupEvents();
-
-      if (deleteCnt > 0L){
-        LOG.info("Number of events deleted from event Table: "+deleteCnt);
-      }
-    } catch (Exception e) {
-      LOG.error("Exception while trying to delete events ", e);
-    }
+  public void notifyBadConnectionUrl(String url) {
   }
+
 }
