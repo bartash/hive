@@ -40,7 +40,7 @@ public class TestPartitionNameWhitelistValidation {
 
   @BeforeClass
   public static void setupBeforeClass() throws Exception {
-    System.setProperty(ConfVars.PARTITION_NAME_WHITELIST_PATTERN.varname, partitionValidationPattern);
+    System.setProperty(ConfVars.PARTITION_NAME_WHITELIST_PATTERN.toString(), partitionValidationPattern);
     conf = MetastoreConf.newMetastoreConf();
     MetastoreConf.setClass(conf, ConfVars.EXPRESSION_PROXY_CLASS,
         DefaultPartitionExpressionProxy.class, PartitionExpressionProxy.class);

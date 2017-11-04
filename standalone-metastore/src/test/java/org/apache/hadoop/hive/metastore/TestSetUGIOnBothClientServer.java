@@ -26,6 +26,6 @@ public class TestSetUGIOnBothClientServer extends TestRemoteHiveMetaStore{
     super();
     isThriftClient = true;
     // This will turn on setugi on both client and server processes of the test.
-    System.setProperty(MetastoreConf.ConfVars.EXECUTE_SET_UGI.varname, "true");
+    System.setProperty(MetastoreConf.ConfVars.EXECUTE_SET_UGI.toString(), "true");
   }
 }

@@ -50,8 +50,8 @@ public class TestMetaStoreEventListenerOnlyOnCommit {
   public void setUp() throws Exception {
     DummyRawStoreControlledCommit.setCommitSucceed(true);
 
-    System.setProperty(ConfVars.EVENT_LISTENERS.varname, DummyListener.class.getName());
-    System.setProperty(ConfVars.RAW_STORE_IMPL.varname,
+    System.setProperty(ConfVars.EVENT_LISTENERS.toString(), DummyListener.class.getName());
+    System.setProperty(ConfVars.RAW_STORE_IMPL.toString(),
             DummyRawStoreControlledCommit.class.getName());
 
     int port = MetaStoreTestUtils.findFreePort();

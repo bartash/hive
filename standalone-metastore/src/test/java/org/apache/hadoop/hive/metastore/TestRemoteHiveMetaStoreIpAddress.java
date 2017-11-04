@@ -50,7 +50,7 @@ public class TestRemoteHiveMetaStoreIpAddress {
 
 
     LOG.debug("Starting MetaStore Server on port " + port);
-    System.setProperty(ConfVars.EVENT_LISTENERS.varname, IpAddressListener.class.getName());
+    System.setProperty(ConfVars.EVENT_LISTENERS.toString(), IpAddressListener.class.getName());
     MetaStoreTestUtils.startMetaStore(port, HadoopThriftAuthBridge.getBridge(), conf);
 
     msc = new HiveMetaStoreClient(conf);

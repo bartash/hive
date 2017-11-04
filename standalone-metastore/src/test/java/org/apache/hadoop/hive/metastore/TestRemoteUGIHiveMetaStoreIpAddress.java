@@ -22,7 +22,7 @@ import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 
 public class TestRemoteUGIHiveMetaStoreIpAddress extends TestRemoteHiveMetaStoreIpAddress {
   public TestRemoteUGIHiveMetaStoreIpAddress() {
-    System.setProperty(MetastoreConf.ConfVars.EXECUTE_SET_UGI.varname, "true");
+    System.setProperty(MetastoreConf.ConfVars.EXECUTE_SET_UGI.toString(), "true");
   }
 
 }
